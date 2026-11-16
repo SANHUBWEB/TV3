@@ -4275,8 +4275,10 @@ button { touch-action: manipulation; }
   const BAD=new Set(['unavailable','mixed','network','invalid','unsupported']);if(cfg.strict)BAD.add('unverified');
   try{if(localStorage.getItem('iptv_proxy'))BAD.delete('mixed')}catch(e){}
   const stt=window.svChannelStatus||{};
-  list.forEach(c=>{c.svHide=!!(cfg.onlyOk&&BAD.has(stt[chKey(c)]))});
-  if(list.length&&list.every(c=>c.svHide))list.forEach(c=>{c.svHide=false}); // never leave the dashboard empty
+  // http:// streams can't play on an https page, so they are always hidden (no scan or proxy needed).
+  const isHttp=c=>location.protocol==='https:'&&/^\s*http:\/\//i.test(String(c&&c.url||''));
+  list.forEach(c=>{c.svHide=!!(isHttp(c)||(cfg.onlyOk&&BAD.has(stt[chKey(c)])))});
+  if(list.length&&list.every(c=>c.svHide))list.forEach(c=>{c.svHide=isHttp(c)}); // never leave the dashboard empty by status alone
   // One category after another, so numbers run 1..total over the whole playlist.
   if(cfg.autoNum){const flat=[].concat(...groups.values());if(flat.length===list.length)for(let i=0;i<flat.length;i++)list[i]=flat[i]}
   // Stable numbering: once a channel gets a number, keep it across refreshes.
@@ -4659,13 +4661,16 @@ if(!cfg.tabs.some(t=>t.id==='settings')){cfg.tabs.push(T('settings','Settings','
 let tt;function toast(m){const t=$('dmToast');t.textContent=m;t.style.display='block';clearTimeout(tt);tt=setTimeout(()=>t.style.display='none',2000)}
 
 /* ---------- tab content ---------- */
-const active={id:'live',folder:null};
+const active={id:'live',folder:null,brand:null};
 const tab=id=>cfg.tabs.find(t=>t.id===id);
 const hasRule=o=>(o.keys&&o.keys.length)||low(o.match);
 function inSet(c,o){
  if((o.keys||[]).includes(kOf(c)))return true;
  const n=low(c.name);return low(o.match).split(',').map(s=>s.trim()).filter(Boolean).some(t=>n.includes(t));
 }
+const isHD=c=>/\b(hd|fhd|uhd|4k)\b|\b(720|1080|1440|2160)p\b/i.test(String(c.name||'')+' '+String(c.quality||'')+' '+String(c.format||''));
+const BRANDS=[['ZEE',/\bzee|\bzing\b/i],['SONY',/\bsony|\bsab\b|\bpix\b|\bset (hd|max)|\bsony set/i],['COLORS',/colou?rs/i],['STAR',/\bstar\b|\bvijay\b|\bhotstar/i],['&TV',/&\s?(tv|pictures|flix|xplor|prive)|\band ?(tv|pictures|flix)/i],['SUN',/\bsun\b|\bgemini\b|\bsurya\b|\budaya\b/i],['NEWS',/news|aaj tak|ndtv|\babp\b|india tv|republic|tv9|cnn|bbc/i],['MUSIC',/music|\bmtv\b|9xm|b4u|zoom|mastiii|hits|\bepic\b/i],['MOVIES',/movie|cinema|\bmax\b|\bgold\b|\bflix\b/i],['KIDS',/kids|cartoon|nick|pogo|disney|hungama/i],['DISCOVERY',/discovery|animal planet|\btlc\b|nat ?geo|history/i]];
+const brandOf=c=>{const n=String(c.name||'');for(const b of BRANDS)if(b[1].test(n))return b[0];return 'OTHERS'};
 const isPrem=c=>{const t=low((c.name||'')+' '+(c.group||''));return c.premium===true||c.isPremium===true||/\bpremium\b/.test(t)};
 function tabBase(t){
  const all=CH();let out=all;
@@ -4673,7 +4678,7 @@ function tabBase(t){
  else if(t.mode==='premium'||t.mode==='manual'){
   const rules=[t].concat(t.folders||[]).filter(hasRule);
   if(rules.length)out=all.filter(c=>rules.some(r=>inSet(c,r)));
-  else if(t.mode==='premium')out=all.filter(isPrem);
+  else if(t.mode==='premium')out=all.filter(isHD);
   else out=[...all].sort((a,b)=>(watchedChannels.has(kOf(b))?1:0)-(watchedChannels.has(kOf(a))?1:0));
   if(t.keys.length){const ix=new Map(t.keys.map((k,i)=>[k,i]));out=[...out].sort((a,b)=>(ix.has(kOf(a))?ix.get(kOf(a)):1e9)-(ix.has(kOf(b))?ix.get(kOf(b)):1e9))}
  }
@@ -4683,6 +4688,7 @@ function restrict(){
  const t=tab(active.id);
  let b=t?tabBase(t):CH();
  if(t&&active.folder!=null&&t.folders[active.folder])b=b.filter(c=>inSet(c,t.folders[active.folder]));
+ if(t&&t.id==='premium'&&!(t.folders&&t.folders.length)&&active.brand)b=b.filter(c=>brandOf(c)===active.brand);
  // Once the user starts assigning categories in Dashboard Manager, show only categorized channels
  // in the main channel list/player channel navigation. Unassigned channels remain editable in Manager.
  const anyAssignedCategoryOrLanguage=CH().some(c=>{const a=cfg.assign[kOf(c)];return !!(a&&(String(a.cat||'').trim()||String(a.lang||'').trim()))});
@@ -4704,7 +4710,18 @@ const fico=f=>/^https?:/i.test(f.icon||'')?'<i><img src="'+esc(f.icon)+'" alt=""
 function renderFolders(){
  let bar=$('dmFolderBar');const t=tab(active.id),fs=(t&&t.folders)||[];
  if(!bar){const lc=$('channelListContainer');if(!lc)return;bar=document.createElement('div');bar.id='dmFolderBar';lc.parentNode.insertBefore(bar,lc);
-  bar.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;const n=+b.dataset.f;active.folder=n<0?null:n;renderFolders();draw()})}
+  bar.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+   if(b.dataset.b!==undefined){active.brand=b.dataset.b||null;renderFolders();draw();return}
+   const n=+b.dataset.f;active.folder=n<0?null:n;renderFolders();draw()})}
+ // Premium tab: only HD channels, with auto brand chips (ZEE, SONY, COLORS...) that slide left-right.
+ if(t&&t.id==='premium'&&!fs.length&&!(t.keys&&t.keys.length)&&!low(t.match)){
+  const hd=CH().filter(isHD),cnt=new Map();hd.forEach(c=>{const k=brandOf(c);cnt.set(k,(cnt.get(k)||0)+1)});
+  const order=BRANDS.map(b=>b[0]).concat('OTHERS').filter(k=>cnt.has(k));
+  if(active.brand&&!cnt.has(active.brand))active.brand=null;
+  bar.style.display='flex';
+  bar.innerHTML='<button data-b="" class="'+(!active.brand?'on':'')+'"><i>\u2b50</i><span>All HD ('+hd.length+')</span></button>'+order.map(k=>'<button data-b="'+esc(k)+'" class="'+(active.brand===k?'on':'')+'"><i>'+esc(k.charAt(0))+'</i><span>'+esc(k)+' ('+cnt.get(k)+')</span></button>').join('');
+  return;
+ }
  bar.style.display=fs.length?'flex':'none';
  bar.innerHTML=fs.length?'<button data-f="-1" class="'+(active.folder==null?'on':'')+'"><i>\ud83d\uddc2\ufe0f</i>All</button>'+fs.map((f,i)=>'<button data-f="'+i+'" class="'+(active.folder===i?'on':'')+'">'+fico(f)+'<span>'+esc(f.name)+'</span></button>').join(''):'';
 }
@@ -4719,7 +4736,7 @@ function showBrowser(){
 function showTab(id){
  if(!tab(id))id=cfg.tabs[0].id;
  if(id==='settings'){active.id=id;renderNav();try{closeAllOverlayPages()}catch(e){}const sp=document.getElementById('settingsPage');if(sp)sp.style.display='flex';return;}
- active.id=id;active.folder=null;
+ active.id=id;active.folder=null;active.brand=null;
  try{closeAllOverlayPages()}catch(e){}
  renderNav();if(id==='browser'){showBrowser();return;}renderFolders();draw();
  const lc=$('channelListContainer');if(lc)lc.scrollTo({top:0,behavior:'smooth'});
