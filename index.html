@@ -103,6 +103,10 @@
         .url-input-group input { padding: 14px; border-radius: 8px; border: 1px solid #444; background-color: #2a2a2a; color: #fff; font-size: 15px; outline: none; }
         .url-input-group button { padding: 14px; border-radius: 30px; border: none; font-weight: bold; font-size: 16px; cursor: pointer; background: #a81c2f; color: #fff; }
         .url-input-group button.refresh-btn { background: #2a8a8a; }
+        .pl-row { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+        .pl-row input { flex:1; min-width:0; }
+        .url-input-group .pl-row button.pl-del { flex:0 0 44px; width:44px; height:44px; padding:0; font-size:18px; border-radius:10px; background:#444; }
+        .url-input-group button.pl-add { background:#2a2a2a; color:#fff; border:1px dashed #777; font-size:14px; padding:11px; }
         .url-input-group button.clear-btn { background: #444; }
         #urlStatusMsg { color: #4caf50; margin-top: 15px; display: none; font-size: 14px; font-weight: bold; text-align: center; }
         .cache-info { margin-top: 20px; padding: 15px; background: #1a1a1a; border-radius: 8px; border-left: 4px solid #a81c2f; }
@@ -1085,7 +1089,6 @@ button { touch-action: manipulation; }
 .mc-item button.del{background:#fde8ea;color:#c62839}
 .mc-item button.play{background:#e3f6ea;color:#1a7f43}
 @media(max-width:380px){.mc-row{flex-direction:column}}
-#dataUsageBtn{display:none!important}
 .mc-in{box-sizing:border-box;width:100%;min-width:0;padding:11px 12px;border:1px solid #d5dbe5;border-radius:12px;background:#fff;color:#18202b;font-size:15px;font-family:inherit}
 .mc-imp-list{max-height:360px;overflow-y:auto;border:1px solid #e6e9ef;border-radius:12px;background:#fff}
 .mc-imp-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid #eef1f5;cursor:pointer;min-width:0}
@@ -1416,13 +1419,15 @@ button { touch-action: manipulation; }
     </div>
 
     <!-- Data Usage Page -->
-    <div class="filter-page" id="dataUsagePage" style="z-index: 3500;">
-        <div class="filter-header"><button class="back-btn" id="closeDataUsageBtn"><svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg></button><span class="settings-title">Playlist URL</span></div>
+    <div class="filter-page" id="dataUsagePage" style="z-index: 9300;">
+        <div class="filter-header"><button class="back-btn" id="closeDataUsageBtn"><svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg></button><span class="settings-title">Playlist URLs</span></div>
         <div class="filter-content">
-            <p style="color: #888; margin-bottom: 10px; font-size: 14px;">Enter your IPTV M3U Playlist URL. Channels will be saved in cache for fast loading next time.</p>
+            <p style="color: #888; margin-bottom: 10px; font-size: 14px;">Add one or more IPTV M3U playlist URLs. Press <b>Save &amp; Load All Channels</b> once: every URL is saved and all channels are loaded together (duplicates are merged).</p>
             <div class="url-input-group">
-                <input type="text" id="iptvUrlInput" placeholder="Paste your own M3U playlist URL (https://...)">
-                <button id="saveUrlBtn">Save & Load Channels</button>
+                <input type="text" id="iptvUrlInput" style="display:none" tabindex="-1" aria-hidden="true">
+                <div id="plUrlRows"></div>
+                <button type="button" id="plAddUrlBtn" class="pl-add">+ Add another IPTV URL</button>
+                <button id="saveUrlBtn">Save & Load All Channels</button>
                 <button class="refresh-btn" id="refreshUrlBtn" style="display: none;">&#x1f504; Refresh Channels</button>
                 <button class="clear-btn" id="clearCacheBtn" style="display: none;">&#x1f5d1;&#xfe0f; Clear Cache</button>
                 <p style="font-size:13px;color:#687386;line-height:1.45">Refresh adds new channels to your saved list. Channels will stay here even if they disappear from a later playlist. Use &#x201c;Clear Cache&#x201d; only when you want to delete the saved list.</p>
@@ -2259,48 +2264,75 @@ button { touch-action: manipulation; }
             return result;
         }
 
-        async function loadIPTV(url, saveToCache = true) {
-            return; // playlist URLs are disabled: only channels added in My Channels are shown
-            const listContainer = document.getElementById('channelListContainer');
-            const urlStatusMsg = document.getElementById('urlStatusMsg');
-            url = String(url || '').trim();
-            if (!/^https?:\/\//i.test(url)) { alert('Please enter a valid http/https M3U URL.'); return; }
-            playlistState = 'loading'; playlistError = ''; lastPlaylistUrl = url;
+        const MULTI_KEY = 'iptv_multi_urls_v1';
+        function getSavedUrls() {
+            try { const a = JSON.parse(localStorage.getItem(MULTI_KEY) || '[]'); return Array.isArray(a) ? a.filter(x => typeof x === 'string' && x.trim()) : []; } catch (e) { return []; }
+        }
+        let plLoading = false;
+        // Load several M3U URLs together and merge them into one channel list.
+        async function loadPlaylists(urls, saveToCache = true, silent = false) {
+            urls = [...new Set((urls || []).map(u => String(u || '').trim()).filter(Boolean))];
+            const st = document.getElementById('urlStatusMsg');
+            const say = (html, color) => { if (st && !silent) { st.style.display = 'block'; st.style.color = color || '#4caf50'; st.innerHTML = html; } };
+            if (!urls.length) { if (!silent) alert('Please add at least one valid http/https M3U URL.'); return; }
+            const bad = urls.find(u => !/^https?:\/\//i.test(u));
+            if (bad) { if (!silent) alert('Invalid URL (must start with http/https):\n' + bad); return; }
+            if (plLoading) return;
+            plLoading = true;
+            playlistState = 'loading'; playlistError = ''; lastPlaylistUrl = urls[0];
             if (!Array.isArray(channels) || !channels.length) renderChannels([]);
-            if (urlStatusMsg) { urlStatusMsg.style.display = 'block'; urlStatusMsg.style.color = '#4caf50'; urlStatusMsg.innerHTML = '<span class="spinner"></span> Downloading playlist...'; }
+            say('<span class="spinner"></span> Downloading ' + urls.length + ' playlist' + (urls.length > 1 ? 's' : '') + '...');
             try {
-                const data = await fetchPlaylist(url);
-                const freshChannels = parseM3U(data);
-                // Keep the permanent master list and record newly discovered channels.
-                const previousMaster = saveToCache ? (loadChannelsFromCache() || channels || []) : [];
-                const mergeKey = c => { const u=String(c&&c.url||'').trim().toLowerCase(); return u ? 'url:'+u : 'name:'+String(c&&c.name||'').trim().toLowerCase()+'|group:'+String(c&&c.group||'').trim().toLowerCase(); };
+                const results = await Promise.allSettled(urls.map(async u => {
+                    const list = parseM3U(await fetchPlaylist(u));
+                    list.forEach(c => { c.svSrc = u; });
+                    return list;
+                }));
+                const host = u => { try { return new URL(u).hostname; } catch (e) { return u.slice(0, 30); } };
+                const lines = [], failed = new Set();
+                let merged = [], total = 0;
+                const previousMaster = saveToCache ? (loadChannelsFromCache() || []) : [];
+                results.forEach((r, k) => {
+                    if (r.status === 'fulfilled') {
+                        total += r.value.length;
+                        lines.push('\u2705 ' + (k + 1) + ') ' + escapeHtml(host(urls[k])) + ' \u2014 ' + r.value.length + ' channels');
+                    } else {
+                        failed.add(urls[k]);
+                        lines.push('\u274c ' + (k + 1) + ') ' + escapeHtml(host(urls[k])) + ' \u2014 ' + escapeHtml((r.reason && r.reason.message) || 'failed'));
+                    }
+                });
+                // A playlist that could not be downloaded keeps its previously saved channels.
+                merged = previousMaster.filter(c => c && failed.has(c.svSrc));
+                results.forEach(r => { if (r.status === 'fulfilled') merged = mergePermanentChannels(merged, r.value); });
+                const mergeKey = c => { const u = String(c && c.url || '').trim().toLowerCase(); return u ? 'url:' + u : 'name:' + String(c && c.name || '').trim().toLowerCase(); };
                 const known = new Set(previousMaster.map(mergeKey));
-                const newlyAdded = [];
-                freshChannels.forEach(c => { const k=mergeKey(c); if(!known.has(k)){newlyAdded.push(c);known.add(k);} });
-                if(saveToCache){ try { localStorage.setItem('iptv_last_refresh_new_channels', JSON.stringify(newlyAdded)); localStorage.setItem('iptv_last_refresh_source_count', String(freshChannels.length)); } catch(e){} }
-                channels = withMine(saveToCache ? mergePermanentChannels(previousMaster, freshChannels) : freshChannels);
+                const newlyAdded = merged.filter(c => !known.has(mergeKey(c)));
+                if (saveToCache) { try { localStorage.setItem('iptv_last_refresh_new_channels', JSON.stringify(newlyAdded)); localStorage.setItem('iptv_last_refresh_source_count', String(total)); } catch (e) {} }
+                if (!merged.length) { playlistState = 'ready'; throw new Error('No channels found. ' + lines.join(' | ').replace(/<[^>]+>/g, '')); }
+                channels = withMine(merged);
                 buildAutoFilters(channels);
-                if (!channels.length) { playlistState = 'ready'; throw new Error('No channels found. Check that the URL points to a valid M3U playlist.'); }
                 playlistState = 'ready';
                 renderChannels(applyFilters(channels));
                 restoreLastChannelOrShowReady(channels);
-                // Start playback from the real playlist after it has loaded, if Home Autoplay is enabled.
                 autoStartFirstChannel(channels);
-                if (saveToCache) {
-                    const saved = saveChannelsToCache(channels, url);
-                    if (urlStatusMsg) {
-                        urlStatusMsg.innerHTML = saved ? `\u2705 ${channels.length} total saved channels. New channels were added; older channels were kept.` : `\u2705 ${channels.length} channels loaded.`;
-                        urlStatusMsg.style.color = saved ? '#4caf50' : '#ff9800';
-                    }
-                }
+                let saved = true;
+                if (saveToCache) saved = saveChannelsToCache(channels, urls[0]);
+                const ok = failed.size === 0;
+                say(lines.join('<br>') + '<br><b>' + channels.length + ' total channels</b>' + (saved ? '' : ' (loaded, but too large to cache; it will reload from the URLs on next start)'), ok ? '#4caf50' : '#ff9800');
                 updateCacheInfo();
-                setTimeout(() => { if (urlStatusMsg) urlStatusMsg.style.display = 'none'; dataUsagePage.style.display = 'none'; }, 1200);
+                if (ok && !silent) setTimeout(() => { if (st) st.style.display = 'none'; dataUsagePage.style.display = 'none'; }, 1800);
             } catch (error) {
                 console.error('Playlist load error:', error);
                 playlistState = 'error'; playlistError = error.message || String(error);
                 renderChannels(Array.isArray(channels) && channels.length ? applyFilters(channels) : []);
-                if (urlStatusMsg) { urlStatusMsg.innerHTML = `\u274c ${escapeHtml(error.message)}`; urlStatusMsg.style.color = '#ff5252'; }
-            }
+                say('\u274c ' + escapeHtml(error.message), '#ff5252');
+            } finally { plLoading = false; }
+        }
+        window.svLoadAllPlaylists = (silent) => loadPlaylists(getSavedUrls(), true, !!silent);
+        async function loadIPTV(url, saveToCache = true) {
+            const urls = getSavedUrls();
+            if (url && !urls.includes(String(url).trim())) urls.push(String(url).trim());
+            return loadPlaylists(urls, saveToCache, false);
         }
 
         // Real Home Autoplay: run after cached or freshly loaded playlist data exists.
@@ -3392,23 +3424,47 @@ button { touch-action: manipulation; }
         
         dataUsageBtn.addEventListener('click', () => { 
             updateCacheInfo();
+            renderUrlRows();
             dataUsagePage.style.display = 'flex'; 
         });
         
         closeDataUsageBtn.addEventListener('click', () => { dataUsagePage.style.display = 'none'; urlStatusMsg.style.display = 'none'; });
         
         // Save & Load Button
-        saveUrlBtn.addEventListener('click', () => { 
-            const url = iptvUrlInput.value.trim(); 
-            if (!url) { alert('Please enter a valid URL'); return; }
-            loadIPTV(url, true);
+        const plRows = document.getElementById('plUrlRows');
+        function renderUrlRows(list) {
+            list = (list || getSavedUrls()).slice();
+            if (!list.length) list = [''];
+            plRows.innerHTML = list.map(u => '<div class="pl-row"><input type="url" class="pl-url" inputmode="url" autocapitalize="off" spellcheck="false" placeholder="https://example.com/playlist.m3u" value="' + escapeHtml(u) + '"><button type="button" class="pl-del" aria-label="Remove URL">\u2715</button></div>').join('');
+        }
+        function readUrlRows() { return [...new Set([...plRows.querySelectorAll('.pl-url')].map(i => i.value.trim()).filter(Boolean))]; }
+        window.svRenderUrlRows = () => renderUrlRows();
+        document.getElementById('plAddUrlBtn').addEventListener('click', () => {
+            const cur = [...plRows.querySelectorAll('.pl-url')].map(i => i.value);
+            cur.push(''); renderUrlRows(cur);
+            const all = plRows.querySelectorAll('.pl-url'); all[all.length - 1].focus();
+        });
+        plRows.addEventListener('click', e => {
+            const b = e.target.closest('.pl-del'); if (!b) return;
+            const cur = [...plRows.querySelectorAll('.pl-url')].map(i => i.value);
+            cur.splice([...plRows.querySelectorAll('.pl-del')].indexOf(b), 1);
+            renderUrlRows(cur);
+        });
+        renderUrlRows();
+        saveUrlBtn.addEventListener('click', () => {
+            const urls = readUrlRows();
+            if (!urls.length) { alert('Please add at least one IPTV URL'); return; }
+            const bad = urls.find(u => !/^https?:\/\//i.test(u));
+            if (bad) { alert('Invalid URL (must start with http/https):\n' + bad); return; }
+            try { localStorage.setItem(MULTI_KEY, JSON.stringify(urls)); } catch (e) {}
+            renderUrlRows(urls);
+            loadPlaylists(urls, true, false);
         });
 
         // Refresh Button (Re-fetch from saved URL)
         refreshUrlBtn.addEventListener('click', () => {
-            const url = localStorage.getItem(CACHE_KEY_URL);
-            if (!url) { alert('No saved URL found.'); return; }
-            loadIPTV(url, true);
+            if (!getSavedUrls().length) { alert('No saved URL found.'); return; }
+            loadPlaylists(getSavedUrls(), true, false);
         });
 
         // Clear Cache Button
@@ -3417,6 +3473,8 @@ button { touch-action: manipulation; }
                 clearCache();
                 updateCacheInfo();
                 iptvUrlInput.value = '';
+                try { localStorage.removeItem(MULTI_KEY); } catch (e) {}
+                renderUrlRows([]);
                 urlStatusMsg.innerHTML = '\ud83d\uddd1\ufe0f Cache cleared!';
                 urlStatusMsg.style.color = '#ff9800';
                 urlStatusMsg.style.display = 'block';
@@ -3811,19 +3869,15 @@ button { touch-action: manipulation; }
 
         // ================= INITIALIZE (Fast Load from Cache) =================
         window.onload = () => {
-            console.log('App initializing... (own channels only)');
-            // Remove any old playlist / cached channels so only the user's own channels show.
-            try {
-                ['iptv_cached_channels','iptv_m3u_url','iptv_cache_timestamp','iptv_last_refresh_new_channels','iptv_last_refresh_source_count']
-                    .forEach(k => localStorage.removeItem(k));
-                localStorage.removeItem(CACHE_KEY_CHANNELS); localStorage.removeItem(CACHE_KEY_URL); localStorage.removeItem(CACHE_KEY_TIMESTAMP);
-            } catch (e) {}
-            channels = withMine([]);
+            console.log('App initializing...');
+            const _cached = loadChannelsFromCache();
+            channels = withMine(_cached || []);
             playlistState = channels.length ? 'ready' : 'none';
             buildAutoFilters(channels);
             renderChannels(applyFilters(channels));
             restoreLastChannelOrShowReady(channels);
             autoStartFirstChannel(channels);
+            if (!_cached && getSavedUrls().length) loadPlaylists(getSavedUrls(), true, true);
         };
 
 
@@ -4153,7 +4207,7 @@ button { touch-action: manipulation; }
     const act=b.dataset.emptyAction;
     if(act==='clear') svClearAllFilters();
     else if(act==='playlist') $('myChannelsBtn')?.click();
-    else if(act==='retry'){ const u=lastPlaylistUrl||localStorage.getItem(CACHE_KEY_URL); if(u) loadIPTV(u,true); else $('myChannelsBtn')?.click(); }
+    else if(act==='retry'){ if(window.svLoadAllPlaylists&&localStorage.getItem('iptv_multi_urls_v1')) window.svLoadAllPlaylists(false); else $('myChannelsBtn')?.click(); }
   });
 
   // Status line under the title mirrors the player hint (loading / buffering / error text)
@@ -4498,7 +4552,7 @@ button { touch-action: manipulation; }
  $('svPassOk').onclick=submit;$('svPassCancel').onclick=close;
  const adminList=$('svAdminList'), appList=$('settingsPage')?.querySelector('.settings-list');
  if(adminList&&appList){
-   ['myChannelsBtn','autoScanChannelsBtn'].forEach(id=>{const el=$(id);if(el)adminList.appendChild(el)});
+   ['dataUsageBtn','myChannelsBtn','autoScanChannelsBtn'].forEach(id=>{const el=$(id);if(el)adminList.appendChild(el)});
    const adminEntry=document.createElement('div');adminEntry.className='settings-item';adminEntry.id='svAdminEntry';adminEntry.innerHTML='<div class=\"settings-item-left\">🛡️ ADMIN</div><div class=\"settings-item-right\">Protected · Open ›</div>';
    adminEntry.addEventListener('click',()=>window.svOpenSettings());adminEntry.addEventListener('keydown',e=>{if(e.key==='Enter')window.svOpenSettings()});adminEntry.tabIndex=0;appList.appendChild(adminEntry);
  }
@@ -4532,7 +4586,7 @@ button { touch-action: manipulation; }
 <script>
 (function(){
  const $=id=>document.getElementById(id), TABLE='santv_live_sync', ROW='main', ACT='santv_sync_provider';
- const KEYS=['santv_category_merges_v1','santv_custom_channel_numbers_v1','santv_numcfg_v2','santv_dash_v1','iptv_proxy','sv_proxy_saved','sv_proxy_first','santv_display_settings_v2','santv_sort','santv_content_languages_v1','santv_channel_status_v1','santv_low_network_mode_v1','santv_setting_autoplay_home_v1','santv_setting_classic_guide_v1','santv_my_channels_v1','iptv_m3u_url'];
+ const KEYS=['santv_category_merges_v1','santv_custom_channel_numbers_v1','santv_numcfg_v2','santv_dash_v1','iptv_proxy','sv_proxy_saved','sv_proxy_first','santv_display_settings_v2','santv_sort','santv_content_languages_v1','santv_channel_status_v1','santv_low_network_mode_v1','santv_setting_autoplay_home_v1','santv_setting_classic_guide_v1','santv_my_channels_v1','iptv_m3u_url','iptv_multi_urls_v1'];
  const MAPK=['santv_category_merges_v1','santv_custom_channel_numbers_v1','santv_numcfg_v2','santv_dash_v1'],PROXYK=['iptv_proxy','sv_proxy_saved','sv_proxy_first'];
  const raw=k=>{try{return localStorage.getItem(k)}catch(e){return null}},DEV=Math.random().toString(36).slice(2,10);
  const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -4571,7 +4625,7 @@ button { touch-action: manipulation; }
 };`;
 
  const PROV={
-  supabase:{name:'Supabase',icon:'🟢',poll:3000,
+  supabase:{name:'Supabase',icon:'🟢',poll:2000,
    l1:'Supabase Project URL',p1:'https://your-project.supabase.co',s1:'santv_supabase_url',
    l2:'Supabase anon / publishable key',p2:'Paste your anon / publishable key',s2:'santv_supabase_anon_key',need2:true,
    hd(c){return {apikey:c.k,Authorization:'Bearer '+c.k,'Content-Type':'application/json'}},
@@ -4596,7 +4650,7 @@ button { touch-action: manipulation; }
    setup(){return '<h3 style="margin-top:0">One-time Cloudflare setup</h3><ol><li>Cloudflare dashboard → Storage &amp; databases → <b>KV</b> → Create a namespace named <b>SANTV_SYNC</b>.</li><li>Workers &amp; Pages → Create → Hello World → name it <b>santv-sync</b> → Deploy → <b>Edit code</b>, replace everything with this code, then Deploy:</li></ol>'+code(WORKER)+'<ol start="3"><li>Worker → Settings → Bindings → Add → <b>KV namespace</b> → Variable name <b>SANTV_SYNC</b> → pick the namespace you made.</li><li>Worker → Settings → Variables and Secrets → add a secret named <b>SYNC_KEY</b> with any password you like.</li><li>Copy the Worker URL (https://santv-sync.….workers.dev) and that same password into the boxes above.</li></ol><small>The access key stops strangers from reading or changing your settings. KV free plan allows 100,000 reads per day, so each device checks every 8 seconds while the app is open.</small>'}}
  };
 
- let admin=false,applying=false,busy=false,poll=null,pushTimer=null,lastStamp=0,lastAt=0,state='off',toastTimer,sel='supabase';
+ let admin=false,applying=false,busy=false,synced=false,dirty=false,es=null,poll=null,pushTimer=null,lastStamp=0,lastAt=0,state='off',toastTimer,sel='supabase';
  const cfg=p=>{const P=PROV[p];return {u:String(raw(P.s1)||'').trim().replace(/\/+$/,''),k:P.s2?String(raw(P.s2)||'').trim():''}};
  const cur=()=>{const a=raw(ACT);if(a==='none')return '';if(a&&PROV[a])return a;const c=cfg('supabase');return c.u&&c.k?'supabase':''};
  const ready=()=>{const p=cur();if(!p)return false;const c=cfg(p);return !!c.u&&(!PROV[p].need2||!!c.k)};
@@ -4611,13 +4665,17 @@ button { touch-action: manipulation; }
   else{e.textContent='Connecting to '+n+'…';e.style.color='#68768a'}
  }
  function snapshot(){const d={};KEYS.forEach(k=>{const v=raw(k);if(v!==null&&v!=='')d[k]=v});return {device:DEV,stamp:Date.now(),data:d}}
- async function push(){if(!ready()||!admin||busy)return;busy=true;try{const p=cur(),payload=snapshot();await PROV[p].write(cfg(p),payload);lastStamp=payload.stamp;lastAt=Date.now();state='live';status();toast('☁️ Updated across connected devices')}catch(e){state='err';status();toast('Sync failed: '+e.message)}finally{busy=false}}
+ async function push(force){if(!ready()||!admin||busy)return;if(!synced&&!force){dirty=true;return}busy=true;try{const p=cur(),payload=snapshot();await PROV[p].write(cfg(p),payload);lastStamp=payload.stamp;lastAt=Date.now();state='live';status();toast('☁️ Updated across connected devices')}catch(e){state='err';status();toast('Sync failed: '+e.message)}finally{busy=false}}
  function schedule(){if(!admin||applying||!ready())return;clearTimeout(pushTimer);pushTimer=setTimeout(push,650)}
  const proto=Storage.prototype,_set=proto.setItem,_rem=proto.removeItem;
  proto.setItem=function(k,v){const r=_set.apply(this,arguments);if(this===localStorage&&KEYS.includes(k))schedule();return r};proto.removeItem=function(k){const r=_rem.apply(this,arguments);if(this===localStorage&&KEYS.includes(k))schedule();return r};
- function applyRemote(row){const p=row&&row.payload;if(!p||!p.data||p.device===DEV||p.stamp===lastStamp)return;const d=p.data,changed=new Set();applying=true;try{KEYS.forEach(k=>{const nv=Object.prototype.hasOwnProperty.call(d,k)?d[k]:null,cur=raw(k);if(nv===null){if(k!=='iptv_m3u_url'&&cur!==null){_rem.call(localStorage,k);changed.add(k)}}else if(cur!==nv){_set.call(localStorage,k,nv);changed.add(k)}});if(changed.size){if(MAPK.some(k=>changed.has(k))&&window.svReloadMapCfg)try{window.svReloadMapCfg()}catch(e){}if(changed.has('santv_display_settings_v2'))try{loadDisplaySettings();applyDisplaySettings();applyOrientationPreference()}catch(e){}if(PROXYK.some(k=>changed.has(k))){try{const x=$('proxyUrlInput');if(x)x.value=raw('iptv_proxy')||''}catch(e){}if(window.svRefresh)try{window.svRefresh()}catch(e){}}if(changed.has('santv_sort')){const x=$('channelSort'),v=raw('santv_sort');if(x&&v){x.value=v;x.dispatchEvent(new Event('change'))}}if(changed.has('iptv_m3u_url')){const u=raw('iptv_m3u_url');try{if(u&&u!==lastPlaylistUrl)loadIPTV(u,true)}catch(e){}}lastAt=Date.now();toast('⚙️ Settings updated from another device')}}finally{applying=false}}
- async function fetchRemote(){if(!ready()||busy)return;busy=true;try{const p=cur(),row=await PROV[p].read(cfg(p));state='live';if(row)applyRemote(row);status()}catch(e){state='err';status()}finally{busy=false}}
- function connect(){clearInterval(poll);if(!ready()){state='off';status();return}state='conn';status();fetchRemote();poll=setInterval(()=>{if(!document.hidden)fetchRemote()},PROV[cur()].poll)}
+ function applyRemote(row){const p=row&&row.payload;if(!p||!p.data||p.device===DEV||p.stamp===lastStamp)return;const d=p.data,changed=new Set();applying=true;try{KEYS.forEach(k=>{const nv=Object.prototype.hasOwnProperty.call(d,k)?d[k]:null,cur=raw(k);if(nv===null){if(k!=='iptv_m3u_url'&&cur!==null){_rem.call(localStorage,k);changed.add(k)}}else if(cur!==nv){_set.call(localStorage,k,nv);changed.add(k)}});if(changed.size){if(MAPK.some(k=>changed.has(k))&&window.svReloadMapCfg)try{window.svReloadMapCfg()}catch(e){}if(changed.has('santv_display_settings_v2'))try{loadDisplaySettings();applyDisplaySettings();applyOrientationPreference()}catch(e){}if(PROXYK.some(k=>changed.has(k))){try{const x=$('proxyUrlInput');if(x)x.value=raw('iptv_proxy')||''}catch(e){}if(window.svRefresh)try{window.svRefresh()}catch(e){}}if(changed.has('santv_sort')){const x=$('channelSort'),v=raw('santv_sort');if(x&&v){x.value=v;x.dispatchEvent(new Event('change'))}}if(changed.has('iptv_multi_urls_v1')){try{if(window.svLoadAllPlaylists)window.svLoadAllPlaylists(true)}catch(e){}}try{if(window.svDash&&window.svDash.refresh)window.svDash.refresh()}catch(e){}lastAt=Date.now();toast('⚙️ Settings updated from another device')}}finally{applying=false}}
+ async function fetchRemote(){if(!ready()||busy)return;busy=true;try{const p=cur(),row=await PROV[p].read(cfg(p));state='live';if(row)applyRemote(row);if(!synced){synced=true;if(dirty){dirty=false;schedule()}}status()}catch(e){state='err';status()}finally{busy=false}}
+ function stopES(){if(es){try{es.close()}catch(e){}es=null}}
+ function kick(n){n=n||0;if(busy&&n<10){setTimeout(()=>kick(n+1),400);return}fetchRemote()}
+ function connect(){clearInterval(poll);stopES();synced=false;if(!ready()){state='off';status();return}state='conn';status();fetchRemote();poll=setInterval(()=>{if(!document.hidden)fetchRemote()},PROV[cur()].poll);
+  if(cur()==='firebase'&&window.EventSource){try{es=new EventSource(PROV.firebase.path(cfg('firebase')));let t;const h=()=>{clearTimeout(t);t=setTimeout(()=>kick(0),150)};es.addEventListener('put',h);es.addEventListener('patch',h)}catch(e){es=null}}}
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden&&ready())kick(0)});window.addEventListener('focus',()=>{if(ready())kick(0)});window.addEventListener('online',()=>{if(ready())kick(0)});
 
  function renderForm(){
   const P=PROV[sel],c=cfg(sel);
@@ -4634,9 +4692,9 @@ button { touch-action: manipulation; }
 
  const settings=$('svAdminList');if(settings){const item=document.createElement('div');item.className='settings-item';item.tabIndex=0;item.innerHTML='<div class="settings-item-left"><span aria-hidden="true">☁️</span> Live Sync</div><div class="settings-item-right" id="svSyItemR">Setup ›</div>';const open=()=>{sel=cur()||sel;renderForm();status();$('svSyncPage').style.display='flex'};item.addEventListener('click',open);item.addEventListener('keydown',e=>{if(e.key==='Enter')open()});settings.appendChild(item)}
  $('svSyShowKey').onchange=e=>$('svSyKey').type=e.target.checked?'text':'password';$('svSyBack').onclick=()=>$('svSyncPage').style.display='none';
- $('svSySave').onclick=()=>{const P=PROV[sel],u=$('svSyUrl').value.trim().replace(/\/+$/,''),k=P.s2?$('svSyKey').value.trim():'';if(!/^https:\/\//i.test(u)){toast('Enter a valid '+P.l1);return}if(P.need2&&!k){toast('Paste your '+P.l2);return}try{_set.call(localStorage,P.s1,u);if(P.s2)_set.call(localStorage,P.s2,k);_set.call(localStorage,ACT,sel)}catch(e){}lastStamp=0;admin=true;connect();setTimeout(push,900);renderForm()};
- $('svSyPush').onclick=()=>{if(!ready()){toast('Save your sync details first');return}admin=true;push()};
- $('svSyOff').onclick=()=>{const P=PROV[sel],was=cur()===sel;try{_rem.call(localStorage,P.s1);if(P.s2)_rem.call(localStorage,P.s2);if(was)_set.call(localStorage,ACT,'none')}catch(e){}if(was){clearInterval(poll);state='off'}$('svSyUrl').value='';$('svSyKey').value='';status();renderForm();toast(P.name+' sync disconnected')};
+ $('svSySave').onclick=()=>{const P=PROV[sel],u=$('svSyUrl').value.trim().replace(/\/+$/,''),k=P.s2?$('svSyKey').value.trim():'';if(!/^https:\/\//i.test(u)){toast('Enter a valid '+P.l1);return}if(P.need2&&!k){toast('Paste your '+P.l2);return}try{_set.call(localStorage,P.s1,u);if(P.s2)_set.call(localStorage,P.s2,k);_set.call(localStorage,ACT,sel)}catch(e){}lastStamp=0;admin=true;connect();setTimeout(()=>push(true),900);renderForm()};
+ $('svSyPush').onclick=()=>{if(!ready()){toast('Save your sync details first');return}admin=true;push(true)};
+ $('svSyOff').onclick=()=>{const P=PROV[sel],was=cur()===sel;try{_rem.call(localStorage,P.s1);if(P.s2)_rem.call(localStorage,P.s2);if(was)_set.call(localStorage,ACT,'none')}catch(e){}if(was){clearInterval(poll);stopES();state='off'}$('svSyUrl').value='';$('svSyKey').value='';status();renderForm();toast(P.name+' sync disconnected')};
  window.svSyncAdminOn=()=>{admin=true;status()};
  renderForm();status();if(ready()){admin=true;connect()}
 })();
@@ -4712,6 +4770,7 @@ details.dm-card summary{font-weight:700;cursor:pointer}
 #dmFolderBar i{font-style:normal;width:28px;height:28px;border-radius:50%;background:#eef1f6;display:flex;align-items:center;justify-content:center;font-size:16px;overflow:hidden}
 #dmFolderBar img{width:100%;height:100%;object-fit:cover}
 .bottom-nav .dm-ico{font-size:21px;line-height:24px;height:24px;display:block}
+.bottom-nav .nav-item span{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 </style>
 <div id="dmPage">
  <div class="dm-top"><button id="dmBack" class="g">&#x2190;</button><h2>Dashboard Manager</h2></div>
@@ -4729,17 +4788,17 @@ const low=s=>String(s||'').toLowerCase().trim();
 const CH=()=>Array.isArray(channels)?channels:[];
 const kOf=c=>String(c.url||c.name||'').trim();
 const cap=s=>s?s.charAt(0).toUpperCase()+s.slice(1):s;
-const NAVSVG={browser:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 12h18M12 3c5 5 5 13 0 18M12 3c-5 5-5 13 0 18" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',settings:'<svg viewBox="0 0 24 24"><path d="M19.14 12.94a7.5 7.5 0 0 0 .05-1 7.5 7.5 0 0 0-.05-1l2.03-1.58-2-3.46-2.42.98a7.8 7.8 0 0 0-1.73-1L14.65 3h-4l-.37 2.88a7.8 7.8 0 0 0-1.73 1l-2.42-.98-2 3.46 2.03 1.58a7.5 7.5 0 0 0-.05 1 7.5 7.5 0 0 0 .05 1l-2.03 1.58 2 3.46 2.42-.98a7.8 7.8 0 0 0 1.73 1L10.65 21h4l.37-2.88a7.8 7.8 0 0 0 1.73-1l2.42.98 2-3.46-2.03-1.7ZM12.65 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>'};
+const NAVSVG={allch:'<svg viewBox="0 0 24 24"><path d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z"/></svg>',browser:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 12h18M12 3c5 5 5 13 0 18M12 3c-5 5-5 13 0 18" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',settings:'<svg viewBox="0 0 24 24"><path d="M19.14 12.94a7.5 7.5 0 0 0 .05-1 7.5 7.5 0 0 0-.05-1l2.03-1.58-2-3.46-2.42.98a7.8 7.8 0 0 0-1.73-1L14.65 3h-4l-.37 2.88a7.8 7.8 0 0 0-1.73 1l-2.42-.98-2 3.46 2.03 1.58a7.5 7.5 0 0 0-.05 1 7.5 7.5 0 0 0 .05 1l-2.03 1.58 2 3.46 2.42-.98a7.8 7.8 0 0 0 1.73 1L10.65 21h4l.37-2.88a7.8 7.8 0 0 0 1.73-1l2.42.98 2-3.46-2.03-1.7ZM12.65 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>'};
 document.querySelectorAll('.bottom-nav .nav-item').forEach(a=>{const s=a.querySelector('svg');if(s)NAVSVG[a.dataset.nav]=s.outerHTML});
 const PLAYERS=[['','Auto (recommended \u2013 sab try karega)'],['hlsjs','HLS.js Player'],['native','Native HTML5 Player'],['proxy','Proxy / Worker Route (HLS.js)'],['external','External Player (VLC / MX)']];
 const plName=v=>(PLAYERS.find(p=>p[0]===(v||''))||PLAYERS[0])[1].replace(/ \(.*\)$/,'');
 const plOpts=cur=>PLAYERS.map(p=>'<option value="'+p[0]+'"'+((cur||'')===p[0]?' selected':'')+'>'+esc(p[1])+'</option>').join('');
 const T=(id,label,mode)=>({id,label,icon:id,mode,match:'',keys:[],folders:[]});
-const DEF=()=>({assign:{},cats:[],langs:[],hideCats:[],hideLangs:[],hiddenLangs:[],tabs:[T('home','Home','all'),T('live','Live TV','all'),T('browser','Browser','browser'),T('premium','Premium','premium'),T('trending','Trending','manual'),T('settings','Settings','settings')]});
-function load(){try{const o=JSON.parse(localStorage.getItem(KEY)||'null');if(o&&Array.isArray(o.tabs)&&o.tabs.length)return Object.assign(DEF(),o)}catch(e){}return DEF()}
+const DEF=()=>({assign:{},cats:[],langs:[],hideCats:[],hideLangs:[],hiddenLangs:[],tabs:[T('home','Home','all'),T('live','Live TV','all'),T('allch','All Channels','everything'),T('premium','Premium','premium'),T('trending','Trending','manual'),T('settings','Settings','settings')]});
+function fixTabs(c){let made=c.tabs.some(t=>t.id==='allch');c.tabs=c.tabs.map(t=>{if(t.id==='free'||t.id==='browser'){if(made)return null;made=true;return T('allch','All Channels','everything')}return t}).filter(Boolean);if(!made)c.tabs.splice(Math.min(2,c.tabs.length),0,T('allch','All Channels','everything'));return c}
+function load(){try{const o=JSON.parse(localStorage.getItem(KEY)||'null');if(o&&Array.isArray(o.tabs)&&o.tabs.length)return fixTabs(Object.assign(DEF(),o))}catch(e){}return DEF()}
 let cfg=load();
-const oldFree=cfg.tabs.findIndex(t=>t.id==='free');if(oldFree>=0){cfg.tabs[oldFree]=T('browser','Browser','browser');try{localStorage.setItem(KEY,JSON.stringify(cfg))}catch(e){}}
-if(!cfg.tabs.some(t=>t.id==='browser')){cfg.tabs.splice(Math.min(2,cfg.tabs.length),0,T('browser','Browser','browser'));try{localStorage.setItem(KEY,JSON.stringify(cfg))}catch(e){}}
+try{const _cur=localStorage.getItem(KEY),_new=JSON.stringify(cfg);if(_cur!==null&&_cur!==_new&&/"id":"(browser|free)"/.test(_cur))localStorage.setItem(KEY,_new)}catch(e){}
 if(!Array.isArray(cfg.hiddenLangs))cfg.hiddenLangs=[];
 const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(cfg))}catch(e){}};
 if(!cfg.tabs.some(t=>t.id==='settings')){cfg.tabs.push(T('settings','Settings','settings'));save();}
@@ -4779,6 +4838,7 @@ function restrict(){
  const anyAssignedCategoryOrLanguage=CH().some(c=>{const a=cfg.assign[kOf(c)];return !!(a&&(String(a.cat||'').trim()||String(a.lang||'').trim()))});
  /* FIX: unassigned channels stay visible (auto category/language still applies). */
  // Per-channel Show/Hide setting applies everywhere. Hidden channels remain editable in Manager.
+ if(t&&t.mode==='everything')return b;
  return b.filter(c=>!(cfg.assign[kOf(c)]&&cfg.assign[kOf(c)].show===false) && !cfg.hiddenLangs.some(h=>low(h)===low(chLang(c))));
 }
 const _af=window.applyFilters;
@@ -4823,7 +4883,7 @@ function showTab(id){
  if(id==='settings'){active.id=id;renderNav();try{closeAllOverlayPages()}catch(e){}const sp=document.getElementById('settingsPage');if(sp)sp.style.display='flex';return;}
  active.id=id;active.folder=null;active.brand=null;
  try{closeAllOverlayPages()}catch(e){}
- renderNav();if(id==='browser'){showBrowser();return;}renderFolders();draw();
+ renderNav();renderFolders();draw();
  const lc=$('channelListContainer');if(lc)lc.scrollTo({top:0,behavior:'smooth'});
 }
 document.querySelector('.bottom-nav').addEventListener('click',e=>{const a=e.target.closest('.nav-item');if(!a)return;e.preventDefault();showTab(a.dataset.nav)});
@@ -4998,9 +5058,9 @@ function listAction(kind,e){
  save();applyAll();renderLists(kind);
 }
 function renderNavEd(){
- body().innerHTML='<div class="dm-card"><small>Icon: emoji likho (\ud83c\udfac) ya preset: home / live / free / premium / trending. Mode: <b>All</b> = sab, <b>Free</b>, <b>Premium</b>, <b>Manual</b> = sirf keywords/channels jo aap chuno. Folder = tab ke andar brand (Zee, Sony). Keywords comma se alag.</small></div>'
+ body().innerHTML='<div class="dm-card"><small>Icon: emoji likho (\ud83c\udfac) ya preset: home / live / free / premium / trending. Mode: <b>All</b> = sab, <b>Free</b>, <b>Premium</b>, <b>Manual</b> = sirf keywords/channels jo aap chuno, <b>Everything</b> = poori channel list (All Channels). Folder = tab ke andar brand (Zee, Sony). Keywords comma se alag.</small></div>'
  +cfg.tabs.map((t,i)=>'<div class="dm-card" data-t="'+i+'"><div class="dm-row"><input data-f="icon" value="'+esc(t.icon)+'" style="width:84px"><input data-f="label" value="'+esc(t.label)+'" style="flex:1"></div>'
- +'<select data-f="mode">'+['all','free','premium','manual'].map(m=>'<option value="'+m+'"'+(t.mode===m?' selected':'')+'>'+cap(m)+'</option>').join('')+'</select>'
+ +'<select data-f="mode">'+['all','free','premium','manual','everything'].map(m=>'<option value="'+m+'"'+(t.mode===m?' selected':'')+'>'+cap(m)+'</option>').join('')+'</select>'
  +'<input data-f="match" placeholder="Keywords (zee, sony) \u2014 is tab mein auto aayenge" value="'+esc(t.match)+'">'
  +'<div class="dm-sub">'+t.folders.map((f,j)=>'<div class="dm-row" data-fo="'+j+'"><input data-g="icon" value="'+esc(f.icon||'')+'" placeholder="\ud83c\udfac / logo URL" style="width:80px"><input data-g="name" value="'+esc(f.name)+'" placeholder="Folder naam" style="flex:1;min-width:90px"><input data-g="match" value="'+esc(f.match||'')+'" placeholder="keywords" style="flex:1;min-width:90px"><button class="g sm" data-act="fup" title="Move folder up">↑</button><button class="g sm" data-act="fdown" title="Move folder down">↓</button><button class="g sm" data-act="delf">\ud83d\uddd1</button></div>').join('')+'<small>Folder order: ↑ / ↓ se first se last position tak move karein.</small><button class="g sm" data-act="addf">+ Folder</button></div>'
  +'<div class="dm-row"><button class="g sm" data-act="up">\u2191</button><button class="g sm" data-act="down">\u2193</button><button class="g sm" data-act="delt">\ud83d\uddd1 Tab hatao</button></div></div>').join('')
