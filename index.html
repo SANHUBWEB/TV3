@@ -4508,52 +4508,137 @@ button { touch-action: manipulation; }
 })();
 </script>
 
-<!-- ===== Supabase Live Sync ===== -->
+<!-- ===== Live Sync: choose Supabase / Firebase / Cloudflare ===== -->
 <style>
 #svSyncPage{position:fixed;inset:0;z-index:9100;background:#f5f7fb;color:#182230;display:none;flex-direction:column;overflow:auto;padding:18px;font:15px system-ui}
 #svSyncPage .sv-sync-card{background:#fff;border:1px solid #e3e8f0;border-radius:18px;padding:16px;margin:12px 0;box-shadow:0 5px 20px rgba(25,45,75,.05)}
 #svSyncPage input{width:100%;box-sizing:border-box;padding:13px;border:1px solid #d5dce7;border-radius:12px;background:#fff;color:#182230;font-size:15px;margin:7px 0 14px}
 #svSyncPage button{padding:12px 16px;border:0;border-radius:12px;background:#1677d2;color:#fff;font-weight:700;font-size:14px}
 #svSyncPage button.secondary{background:#eaf0f7;color:#243348}#svSyncPage .sv-sync-actions{display:flex;gap:8px;flex-wrap:wrap}#svSyncPage small{color:#68768a;line-height:1.5;display:block}#svSyncToast{position:fixed;z-index:99998;bottom:90px;left:50%;transform:translateX(-50%);background:#172033;color:#fff;border-radius:12px;padding:10px 16px;font:600 14px system-ui;display:none;max-width:90vw}
+#svSyncPage .sv-provs{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 16px}
+#svSyncPage .sv-provs button{flex:1;min-width:110px;background:#eaf0f7;color:#243348;border:2px solid transparent}
+#svSyncPage .sv-provs button.on{background:#e3f0ff;color:#0b4f9c;border-color:#1677d2}
+#svSyncPage ol{padding-left:20px;line-height:1.65;margin:8px 0}
+#svSyncPage pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f6fa;padding:12px;border-radius:12px;font-size:12px;margin:8px 0}
 </style>
-<div id="svSyncPage"><div style="display:flex;align-items:center;gap:12px"><button id="svSyBack" class="secondary">← Back</button><h2 style="margin:8px 0">☁️ Live Sync · Supabase</h2></div>
-<div class="sv-sync-card"><h3 style="margin:0 0 6px">Connect all your devices</h3><p style="margin:0;color:#68768a">Save your Supabase Project URL and anon/public key. App settings are shared with connected devices automatically.</p>
-<label for="svSyUrl"><b>Supabase Project URL</b></label><input type="url" id="svSyUrl" placeholder="https://your-project.supabase.co" autocomplete="url" autocapitalize="off" spellcheck="false">
-<label for="svSyKey"><b>Supabase anon / publishable key</b></label><input type="password" id="svSyKey" placeholder="Paste your anon / publishable key" autocomplete="off" autocapitalize="off" spellcheck="false">
-<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:0 0 12px"><input id="svSyShowKey" type="checkbox" style="width:auto;margin:0"> Show key</label>
+<div id="svSyncPage"><div style="display:flex;align-items:center;gap:12px"><button id="svSyBack" class="secondary">← Back</button><h2 style="margin:8px 0">☁️ Live Sync</h2></div>
+<div class="sv-sync-card"><h3 style="margin:0 0 6px">Connect all your devices</h3><p style="margin:0;color:#68768a">Choose where your app settings are stored, then save its details. Settings are shared with connected devices automatically.</p>
+<div class="sv-provs" id="svSyProvs"></div>
+<label for="svSyUrl" id="svSyUrlL"></label><input type="url" id="svSyUrl" autocomplete="url" autocapitalize="off" spellcheck="false">
+<div id="svSyKeyWrap"><label for="svSyKey" id="svSyKeyL"></label><input type="password" id="svSyKey" autocomplete="off" autocapitalize="off" spellcheck="false">
+<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:0 0 12px"><input id="svSyShowKey" type="checkbox" style="width:auto;margin:0"> Show key</label></div>
 <div class="sv-sync-actions"><button id="svSySave">Save & Connect</button><button id="svSyPush" class="secondary">Publish now</button><button id="svSyOff" class="secondary">Disconnect</button></div><p id="svSyStatus" aria-live="polite" style="font-weight:650"></p></div>
-<div class="sv-sync-card"><h3 style="margin-top:0">One-time Supabase setup</h3><p>Supabase → SQL Editor → New query. Run this SQL:</p>
-<pre style="white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f6fa;padding:12px;border-radius:12px;font-size:12px">create table if not exists public.santv_live_sync (id text primary key, payload jsonb not null default '{}'::jsonb, updated_at timestamptz not null default now());
-alter table public.santv_live_sync enable row level security;
-grant select, insert, update on public.santv_live_sync to anon;
-create policy "public read sync" on public.santv_live_sync for select to anon using (true);
-create policy "public insert sync" on public.santv_live_sync for insert to anon with check (true);
-create policy "public update sync" on public.santv_live_sync for update to anon using (true) with check (true);</pre>
-<small>Only use the anon/public key. Never paste a service_role or secret key. These public policies let anyone with the project URL and anon key read/change this app's shared settings. Use Supabase Auth and stricter policies for private multi-user data.</small></div></div><div id="svSyncToast"></div>
+<div class="sv-sync-card" id="svSySetup"></div></div><div id="svSyncToast"></div>
 <script>
 (function(){
- const $=id=>document.getElementById(id), URLKEY='santv_supabase_url', KEYKEY='santv_supabase_anon_key', TABLE='santv_live_sync', ROW='main';
+ const $=id=>document.getElementById(id), TABLE='santv_live_sync', ROW='main', ACT='santv_sync_provider';
  const KEYS=['santv_category_merges_v1','santv_custom_channel_numbers_v1','santv_numcfg_v2','santv_dash_v1','iptv_proxy','sv_proxy_saved','sv_proxy_first','santv_display_settings_v2','santv_sort','santv_content_languages_v1','santv_channel_status_v1','santv_low_network_mode_v1','santv_setting_autoplay_home_v1','santv_setting_classic_guide_v1','santv_my_channels_v1','iptv_m3u_url'];
  const MAPK=['santv_category_merges_v1','santv_custom_channel_numbers_v1','santv_numcfg_v2','santv_dash_v1'],PROXYK=['iptv_proxy','sv_proxy_saved','sv_proxy_first'];
  const raw=k=>{try{return localStorage.getItem(k)}catch(e){return null}},DEV=Math.random().toString(36).slice(2,10);
- const base=()=>String(raw(URLKEY)||'').trim().replace(/\/+$/,''),key=()=>String(raw(KEYKEY)||'').trim();
- let admin=false,applying=false,busy=false,poll=null,pushTimer=null,lastStamp=0,lastAt=0,state='off',toastTimer;
+ const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+ const code=t=>'<pre>'+esc(t)+'</pre><button type="button" class="secondary svCopy">📋 Copy</button>';
+ async function chk(r){if(!r.ok)throw Error('HTTP '+r.status+' '+(await r.text()).slice(0,160));return r}
+
+ const SQL="create table if not exists public.santv_live_sync (id text primary key, payload jsonb not null default '{}'::jsonb, updated_at timestamptz not null default now());\nalter table public.santv_live_sync enable row level security;\ngrant select, insert, update on public.santv_live_sync to anon;\ncreate policy \"public read sync\" on public.santv_live_sync for select to anon using (true);\ncreate policy \"public insert sync\" on public.santv_live_sync for insert to anon with check (true);\ncreate policy \"public update sync\" on public.santv_live_sync for update to anon using (true) with check (true);";
+ const FBRULES='{\n  "rules": {\n    "santv_live_sync": { ".read": true, ".write": true }\n  }\n}';
+ const WORKER=`export default {
+  async fetch(req, env) {
+    const cors = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET,PUT,POST,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type,Authorization'
+    };
+    const json = (o, s = 200) => new Response(JSON.stringify(o), {
+      status: s,
+      headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
+    });
+    if (req.method === 'OPTIONS') return new Response(null, { headers: cors });
+    if (env.SYNC_KEY && req.headers.get('Authorization') !== 'Bearer ' + env.SYNC_KEY)
+      return json({ error: 'unauthorized' }, 401);
+    if (req.method === 'GET') {
+      const v = await env.SANTV_SYNC.get('main');
+      return json(v ? JSON.parse(v) : null);
+    }
+    if (req.method === 'PUT' || req.method === 'POST') {
+      let b = null;
+      try { b = await req.json(); } catch (e) {}
+      if (!b || typeof b.payload !== 'object') return json({ error: 'bad body' }, 400);
+      await env.SANTV_SYNC.put('main', JSON.stringify({ payload: b.payload, updated_at: new Date().toISOString() }));
+      return json({ ok: true });
+    }
+    return json({ error: 'method not allowed' }, 405);
+  }
+};`;
+
+ const PROV={
+  supabase:{name:'Supabase',icon:'🟢',poll:3000,
+   l1:'Supabase Project URL',p1:'https://your-project.supabase.co',s1:'santv_supabase_url',
+   l2:'Supabase anon / publishable key',p2:'Paste your anon / publishable key',s2:'santv_supabase_anon_key',need2:true,
+   hd(c){return {apikey:c.k,Authorization:'Bearer '+c.k,'Content-Type':'application/json'}},
+   async read(c){const r=await chk(await fetch(c.u+'/rest/v1/'+TABLE+'?id=eq.'+encodeURIComponent(ROW)+'&select=payload,updated_at',{headers:this.hd(c),cache:'no-store'}));const a=await r.json();return a[0]||null},
+   async write(c,payload){await chk(await fetch(c.u+'/rest/v1/'+TABLE+'?on_conflict=id',{method:'POST',headers:Object.assign(this.hd(c),{Prefer:'resolution=merge-duplicates,return=minimal'}),body:JSON.stringify({id:ROW,payload:payload,updated_at:new Date().toISOString()})}))},
+   check:'URL, key, table and SQL policies',
+   setup(){return '<h3 style="margin-top:0">One-time Supabase setup</h3><p>Supabase → SQL Editor → New query. Run this SQL:</p>'+code(SQL)+'<small>Only use the anon/public key. Never paste a service_role or secret key. These public policies let anyone with the project URL and anon key read/change this app\'s shared settings. Use Supabase Auth and stricter policies for private multi-user data.</small>'}},
+  firebase:{name:'Firebase',icon:'🔥',poll:3000,
+   l1:'Firebase Realtime Database URL',p1:'https://your-project-default-rtdb.firebaseio.com',s1:'santv_firebase_url',need2:false,
+   path(c){return c.u+'/'+TABLE+'/'+ROW+'.json'},
+   async read(c){const r=await chk(await fetch(this.path(c),{cache:'no-store'}));return await r.json()},
+   async write(c,payload){await chk(await fetch(this.path(c),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({payload:payload,updated_at:new Date().toISOString()})}))},
+   check:'Database URL and Rules',
+   setup(){return '<h3 style="margin-top:0">One-time Firebase setup</h3><ol><li>Open console.firebase.google.com → your project → Build → <b>Realtime Database</b> → Create Database.</li><li>On the Data tab copy the database URL (https://…firebaseio.com or …firebasedatabase.app) and paste it above.</li><li>Open the <b>Rules</b> tab, replace everything with this, then press Publish:</li></ol>'+code(FBRULES)+'<small>These rules are public: anyone who knows your database URL can read/change this app\'s shared settings (only the santv_live_sync path is opened). Do not store private data here.</small>'}},
+  cloudflare:{name:'Cloudflare',icon:'🟠',poll:8000,
+   l1:'Cloudflare Worker URL',p1:'https://santv-sync.your-name.workers.dev',s1:'santv_cf_url',
+   l2:'Access key (same as SYNC_KEY secret)',p2:'Paste your access key',s2:'santv_cf_key',need2:false,
+   hd(c){return c.k?{Authorization:'Bearer '+c.k}:{}},
+   async read(c){const r=await chk(await fetch(c.u,{headers:this.hd(c),cache:'no-store'}));return await r.json()},
+   async write(c,payload){await chk(await fetch(c.u,{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},this.hd(c)),body:JSON.stringify({payload:payload})}))},
+   check:'Worker URL, access key and KV binding',
+   setup(){return '<h3 style="margin-top:0">One-time Cloudflare setup</h3><ol><li>Cloudflare dashboard → Storage &amp; databases → <b>KV</b> → Create a namespace named <b>SANTV_SYNC</b>.</li><li>Workers &amp; Pages → Create → Hello World → name it <b>santv-sync</b> → Deploy → <b>Edit code</b>, replace everything with this code, then Deploy:</li></ol>'+code(WORKER)+'<ol start="3"><li>Worker → Settings → Bindings → Add → <b>KV namespace</b> → Variable name <b>SANTV_SYNC</b> → pick the namespace you made.</li><li>Worker → Settings → Variables and Secrets → add a secret named <b>SYNC_KEY</b> with any password you like.</li><li>Copy the Worker URL (https://santv-sync.….workers.dev) and that same password into the boxes above.</li></ol><small>The access key stops strangers from reading or changing your settings. KV free plan allows 100,000 reads per day, so each device checks every 8 seconds while the app is open.</small>'}}
+ };
+
+ let admin=false,applying=false,busy=false,poll=null,pushTimer=null,lastStamp=0,lastAt=0,state='off',toastTimer,sel='supabase';
+ const cfg=p=>{const P=PROV[p];return {u:String(raw(P.s1)||'').trim().replace(/\/+$/,''),k:P.s2?String(raw(P.s2)||'').trim():''}};
+ const cur=()=>{const a=raw(ACT);if(a==='none')return '';if(a&&PROV[a])return a;const c=cfg('supabase');return c.u&&c.k?'supabase':''};
+ const ready=()=>{const p=cur();if(!p)return false;const c=cfg(p);return !!c.u&&(!PROV[p].need2||!!c.k)};
  function toast(m){const e=$('svSyncToast');e.textContent=m;e.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(()=>e.style.display='none',2600)}
- function status(){const e=$('svSyStatus');if(!e)return;if(!base()||!key()){e.textContent='Sync disconnected · Add Project URL and anon key.';e.style.color='#68768a'}else if(state==='live'){e.textContent='🟢 Connected · last sync '+(lastAt?new Date(lastAt).toLocaleTimeString():'just now');e.style.color='#16803d'}else if(state==='err'){e.textContent='🔴 Connection error · Check URL, key, table and SQL policies.';e.style.color='#b42335'}else{e.textContent='Connecting to Supabase…';e.style.color='#68768a'}}
- function headers(){return {'apikey':key(),'Authorization':'Bearer '+key(),'Content-Type':'application/json'}}
+ function status(){
+  const it=$('svSyItemR'),p=cur(),n=p?PROV[p].name:'';
+  if(it)it.textContent=ready()?(state==='err'?'🔴 ':'🟢 ')+n+' ›':'Setup ›';
+  const e=$('svSyStatus');if(!e)return;
+  if(!ready()){e.textContent='Sync disconnected · Choose a provider and save its details.';e.style.color='#68768a'}
+  else if(state==='live'){e.textContent='🟢 Connected to '+n+' · last sync '+(lastAt?new Date(lastAt).toLocaleTimeString():'just now');e.style.color='#16803d'}
+  else if(state==='err'){e.textContent='🔴 '+n+' connection error · Check '+PROV[p].check+'.';e.style.color='#b42335'}
+  else{e.textContent='Connecting to '+n+'…';e.style.color='#68768a'}
+ }
  function snapshot(){const d={};KEYS.forEach(k=>{const v=raw(k);if(v!==null&&v!=='')d[k]=v});return {device:DEV,stamp:Date.now(),data:d}}
- async function push(){if(!base()||!key()||!admin||busy)return;busy=true;try{const payload=snapshot(),r=await fetch(base()+'/rest/v1/'+TABLE+'?on_conflict=id',{method:'POST',headers:{...headers(),'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify({id:ROW,payload,updated_at:new Date().toISOString()})});if(!r.ok)throw Error('HTTP '+r.status+' '+(await r.text()).slice(0,160));lastStamp=payload.stamp;lastAt=Date.now();state='live';status();toast('☁️ Updated across connected devices')}catch(e){state='err';status();toast('Sync failed: '+e.message)}finally{busy=false}}
- function schedule(){if(!admin||applying||!base()||!key())return;clearTimeout(pushTimer);pushTimer=setTimeout(push,650)}
+ async function push(){if(!ready()||!admin||busy)return;busy=true;try{const p=cur(),payload=snapshot();await PROV[p].write(cfg(p),payload);lastStamp=payload.stamp;lastAt=Date.now();state='live';status();toast('☁️ Updated across connected devices')}catch(e){state='err';status();toast('Sync failed: '+e.message)}finally{busy=false}}
+ function schedule(){if(!admin||applying||!ready())return;clearTimeout(pushTimer);pushTimer=setTimeout(push,650)}
  const proto=Storage.prototype,_set=proto.setItem,_rem=proto.removeItem;
  proto.setItem=function(k,v){const r=_set.apply(this,arguments);if(this===localStorage&&KEYS.includes(k))schedule();return r};proto.removeItem=function(k){const r=_rem.apply(this,arguments);if(this===localStorage&&KEYS.includes(k))schedule();return r};
  function applyRemote(row){const p=row&&row.payload;if(!p||!p.data||p.device===DEV||p.stamp===lastStamp)return;const d=p.data,changed=new Set();applying=true;try{KEYS.forEach(k=>{const nv=Object.prototype.hasOwnProperty.call(d,k)?d[k]:null,cur=raw(k);if(nv===null){if(k!=='iptv_m3u_url'&&cur!==null){_rem.call(localStorage,k);changed.add(k)}}else if(cur!==nv){_set.call(localStorage,k,nv);changed.add(k)}});if(changed.size){if(MAPK.some(k=>changed.has(k))&&window.svReloadMapCfg)try{window.svReloadMapCfg()}catch(e){}if(changed.has('santv_display_settings_v2'))try{loadDisplaySettings();applyDisplaySettings();applyOrientationPreference()}catch(e){}if(PROXYK.some(k=>changed.has(k))){try{const x=$('proxyUrlInput');if(x)x.value=raw('iptv_proxy')||''}catch(e){}if(window.svRefresh)try{window.svRefresh()}catch(e){}}if(changed.has('santv_sort')){const x=$('channelSort'),v=raw('santv_sort');if(x&&v){x.value=v;x.dispatchEvent(new Event('change'))}}if(changed.has('iptv_m3u_url')){const u=raw('iptv_m3u_url');try{if(u&&u!==lastPlaylistUrl)loadIPTV(u,true)}catch(e){}}lastAt=Date.now();toast('⚙️ Settings updated from another device')}}finally{applying=false}}
- async function fetchRemote(){if(!base()||!key()||busy)return;busy=true;try{const r=await fetch(base()+'/rest/v1/'+TABLE+'?id=eq.'+encodeURIComponent(ROW)+'&select=payload,updated_at',{headers:headers(),cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const rows=await r.json();state='live';if(rows.length)applyRemote(rows[0]);status()}catch(e){state='err';status()}finally{busy=false}}
- function connect(){clearInterval(poll);if(!base()||!key()){state='off';status();return}state='conn';status();fetchRemote();poll=setInterval(fetchRemote,3000)}
- const settings=$('svAdminList');if(settings){const item=document.createElement('div');item.className='settings-item';item.tabIndex=0;item.innerHTML='<div class="settings-item-left"><span aria-hidden="true">☁️</span> Live Sync · Supabase</div><div class="settings-item-right">Setup ›</div>';const open=()=>{$('svSyUrl').value=raw(URLKEY)||'';$('svSyKey').value=raw(KEYKEY)||'';status();$('svSyncPage').style.display='flex'};item.addEventListener('click',open);item.addEventListener('keydown',e=>{if(e.key==='Enter')open()});settings.appendChild(item)}
+ async function fetchRemote(){if(!ready()||busy)return;busy=true;try{const p=cur(),row=await PROV[p].read(cfg(p));state='live';if(row)applyRemote(row);status()}catch(e){state='err';status()}finally{busy=false}}
+ function connect(){clearInterval(poll);if(!ready()){state='off';status();return}state='conn';status();fetchRemote();poll=setInterval(()=>{if(!document.hidden)fetchRemote()},PROV[cur()].poll)}
+
+ function renderForm(){
+  const P=PROV[sel],c=cfg(sel);
+  $('svSyProvs').innerHTML=Object.keys(PROV).map(k=>'<button type="button" data-p="'+k+'" class="'+(k===sel?'on':'')+'">'+PROV[k].icon+' '+PROV[k].name+(cur()===k&&ready()?' ✓':'')+'</button>').join('');
+  $('svSyUrlL').innerHTML='<b>'+esc(P.l1)+'</b>';$('svSyUrl').placeholder=P.p1;$('svSyUrl').value=c.u;
+  $('svSyKeyWrap').style.display=P.s2?'':'none';
+  if(P.s2){$('svSyKeyL').innerHTML='<b>'+esc(P.l2)+'</b>';$('svSyKey').placeholder=P.p2;$('svSyKey').value=c.k}
+  $('svSySetup').innerHTML=P.setup();
+ }
+ $('svSyProvs').addEventListener('click',e=>{const b=e.target.closest('button[data-p]');if(!b)return;sel=b.getAttribute('data-p');renderForm()});
+ $('svSySetup').addEventListener('click',e=>{const b=e.target.closest('.svCopy');if(!b)return;const t=b.previousElementSibling.textContent,done=()=>{b.textContent='✅ Copied';setTimeout(()=>b.textContent='📋 Copy',1800)};
+  const fb=()=>{try{const a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;opacity:0';document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();done()}catch(x){toast('Select the text and copy it manually')}};
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(done,fb);else fb()});
+
+ const settings=$('svAdminList');if(settings){const item=document.createElement('div');item.className='settings-item';item.tabIndex=0;item.innerHTML='<div class="settings-item-left"><span aria-hidden="true">☁️</span> Live Sync</div><div class="settings-item-right" id="svSyItemR">Setup ›</div>';const open=()=>{sel=cur()||sel;renderForm();status();$('svSyncPage').style.display='flex'};item.addEventListener('click',open);item.addEventListener('keydown',e=>{if(e.key==='Enter')open()});settings.appendChild(item)}
  $('svSyShowKey').onchange=e=>$('svSyKey').type=e.target.checked?'text':'password';$('svSyBack').onclick=()=>$('svSyncPage').style.display='none';
- $('svSySave').onclick=()=>{const u=$('svSyUrl').value.trim(),k=$('svSyKey').value.trim();if(!/^https:\/\//i.test(u)){toast('Enter a valid Supabase Project URL');return}if(!k){toast('Paste your anon / publishable key');return}try{_set.call(localStorage,URLKEY,u.replace(/\/+$/,''));_set.call(localStorage,KEYKEY,k)}catch(e){}admin=true;connect();setTimeout(push,900)};
- $('svSyPush').onclick=()=>{if(!base()||!key()){toast('Save Supabase URL and key first');return}admin=true;push()};$('svSyOff').onclick=()=>{clearInterval(poll);try{_rem.call(localStorage,URLKEY);_rem.call(localStorage,KEYKEY)}catch(e){}$('svSyUrl').value='';$('svSyKey').value='';state='off';status();toast('Supabase sync disconnected')};
- window.svSyncAdminOn=()=>{admin=true;status()};if(raw(URLKEY)&&raw(KEYKEY)){admin=true;connect()}
+ $('svSySave').onclick=()=>{const P=PROV[sel],u=$('svSyUrl').value.trim().replace(/\/+$/,''),k=P.s2?$('svSyKey').value.trim():'';if(!/^https:\/\//i.test(u)){toast('Enter a valid '+P.l1);return}if(P.need2&&!k){toast('Paste your '+P.l2);return}try{_set.call(localStorage,P.s1,u);if(P.s2)_set.call(localStorage,P.s2,k);_set.call(localStorage,ACT,sel)}catch(e){}lastStamp=0;admin=true;connect();setTimeout(push,900);renderForm()};
+ $('svSyPush').onclick=()=>{if(!ready()){toast('Save your sync details first');return}admin=true;push()};
+ $('svSyOff').onclick=()=>{const P=PROV[sel],was=cur()===sel;try{_rem.call(localStorage,P.s1);if(P.s2)_rem.call(localStorage,P.s2);if(was)_set.call(localStorage,ACT,'none')}catch(e){}if(was){clearInterval(poll);state='off'}$('svSyUrl').value='';$('svSyKey').value='';status();renderForm();toast(P.name+' sync disconnected')};
+ window.svSyncAdminOn=()=>{admin=true;status()};
+ renderForm();status();if(ready()){admin=true;connect()}
 })();
 </script>
 
