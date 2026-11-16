@@ -1720,10 +1720,16 @@ button { touch-action: manipulation; }
             });
         }
 
-        function renderChannels(channelArray) {
+        // Big playlists (thousands of channels) used to create 60,000+ page elements at once and made the whole app,
+        // including every Admin screen, freeze on phones. Now only the first chunk is drawn; more are added while scrolling.
+        const RENDER_CHUNK = 80;
+        let renderedCount = 0, moreSentinel = null, moreObserver = null;
+        function renderChannels(channelArray, keepCount) {
             const listContainer = document.getElementById('channelListContainer');
             listContainer.innerHTML = '';
+            if (moreObserver) { try { moreObserver.disconnect(); } catch (e) {} }
             filteredChannels = Array.isArray(channelArray) ? channelArray : [];
+            renderedCount = 0;
 
             if (!filteredChannels.length) {
                 listContainer.innerHTML = emptyStateHtml();
@@ -1732,8 +1738,20 @@ button { touch-action: manipulation; }
                 return;
             }
 
+            const hasIO = typeof IntersectionObserver === 'function';
+            appendChannelItems(hasIO ? Math.max(RENDER_CHUNK, keepCount || 0) : filteredChannels.length);
+            updateFilterLabel();
+            updateChannelCount();
+            markNowPlaying();
+        }
+
+        function appendChannelItems(count) {
+            const listContainer = document.getElementById('channelListContainer');
+            if (moreSentinel && moreSentinel.parentNode) moreSentinel.remove();
             const fragment = document.createDocumentFragment();
-            filteredChannels.forEach((channel, index) => {
+            const end = Math.min(filteredChannels.length, renderedCount + count);
+            for (let index = renderedCount; index < end; index++) {
+                const channel = filteredChannels[index];
                 const item = document.createElement('div');
                 item.className = 'channel-item';
                 item.dataset.key = channelKey(channel);
@@ -1766,7 +1784,7 @@ button { touch-action: manipulation; }
                 const rerenderKeepScroll = () => {
                     const lc = document.getElementById('channelListContainer');
                     const st = lc.scrollTop;
-                    renderChannels(applyFilters(channels));
+                    renderChannels(applyFilters(channels), renderedCount);
                     lc.scrollTop = st;
                     markNowPlaying();
                 };
@@ -1791,11 +1809,18 @@ button { touch-action: manipulation; }
                 item.addEventListener('touchstart', () => { clearTimeout(pressTimer); pressTimer = setTimeout(doFav, 600); }, { passive: true });
                 ['touchend', 'touchmove', 'touchcancel'].forEach(ev => item.addEventListener(ev, () => clearTimeout(pressTimer), { passive: true }));
                 fragment.appendChild(item);
-            });
+            }
+            renderedCount = end;
             listContainer.appendChild(fragment);
-            updateFilterLabel();
-            updateChannelCount();
-            markNowPlaying();
+            if (renderedCount < filteredChannels.length && typeof IntersectionObserver === 'function') {
+                if (!moreSentinel) { moreSentinel = document.createElement('div'); moreSentinel.className = 'sv-more'; moreSentinel.style.cssText = 'height:1px;flex:0 0 1px;grid-column:1/-1'; }
+                if (!moreObserver) moreObserver = new IntersectionObserver(entries => {
+                    if (entries.some(e => e.isIntersecting) && renderedCount < filteredChannels.length) { appendChannelItems(RENDER_CHUNK); markNowPlaying(); }
+                }, { rootMargin: '900px 0px' });
+                listContainer.appendChild(moreSentinel);
+                moreObserver.disconnect();
+                moreObserver.observe(moreSentinel);
+            }
         }
 
         function toggleFavourite(channel) {
@@ -4599,6 +4624,8 @@ button { touch-action: manipulation; }
 <script>
 (function(){
  const $=id=>document.getElementById(id), TABLE='santv_live_sync', ROW='main', ACT='santv_sync_provider';
+ /* Default Live Sync database: every device connects to this automatically until someone saves a different one (or presses Disconnect). */
+ const DEFAULT_PROV='firebase', DEFAULT_URL='https://sanzone-c5955-default-rtdb.firebaseio.com';
  const KEYS=['santv_category_merges_v1','santv_custom_channel_numbers_v1','santv_numcfg_v2','santv_dash_v1','iptv_proxy','sv_proxy_saved','sv_proxy_first','santv_display_settings_v2','santv_sort','santv_content_languages_v1','santv_channel_status_v1','santv_low_network_mode_v1','santv_setting_autoplay_home_v1','santv_setting_classic_guide_v1','santv_my_channels_v1','iptv_m3u_url','iptv_multi_urls_v1'];
  const MAPK=['santv_category_merges_v1','santv_custom_channel_numbers_v1','santv_numcfg_v2','santv_dash_v1'],PROXYK=['iptv_proxy','sv_proxy_saved','sv_proxy_first'];
  const raw=k=>{try{return localStorage.getItem(k)}catch(e){return null}},DEV=Math.random().toString(36).slice(2,10);
@@ -4664,8 +4691,8 @@ button { touch-action: manipulation; }
  };
 
  let admin=false,applying=false,busy=false,synced=false,dirty=false,es=null,poll=null,pushTimer=null,lastStamp=0,lastAt=0,state='off',toastTimer,sel='supabase';
- const cfg=p=>{const P=PROV[p];return {u:String(raw(P.s1)||'').trim().replace(/\/+$/,''),k:P.s2?String(raw(P.s2)||'').trim():''}};
- const cur=()=>{const a=raw(ACT);if(a==='none')return '';if(a&&PROV[a])return a;const c=cfg('supabase');return c.u&&c.k?'supabase':''};
+ const cfg=p=>{const P=PROV[p];return {u:String(raw(P.s1)||(p===DEFAULT_PROV?DEFAULT_URL:'')||'').trim().replace(/\/+$/,''),k:P.s2?String(raw(P.s2)||'').trim():''}};
+ const cur=()=>{const a=raw(ACT);if(a==='none')return '';if(a&&PROV[a])return a;const c=cfg('supabase');return c.u&&c.k?'supabase':DEFAULT_PROV};
  const ready=()=>{const p=cur();if(!p)return false;const c=cfg(p);return !!c.u&&(!PROV[p].need2||!!c.k)};
  function toast(m){const e=$('svSyncToast');e.textContent=m;e.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(()=>e.style.display='none',2600)}
  function status(){
@@ -4682,7 +4709,9 @@ button { touch-action: manipulation; }
  function schedule(){if(!admin||applying||!ready())return;clearTimeout(pushTimer);pushTimer=setTimeout(push,650)}
  const proto=Storage.prototype,_set=proto.setItem,_rem=proto.removeItem;
  proto.setItem=function(k,v){const r=_set.apply(this,arguments);if(this===localStorage&&KEYS.includes(k))schedule();return r};proto.removeItem=function(k){const r=_rem.apply(this,arguments);if(this===localStorage&&KEYS.includes(k))schedule();return r};
- function applyRemote(row){const p=row&&row.payload;if(!p||!p.data||p.device===DEV||p.stamp===lastStamp)return;const d=p.data,changed=new Set();applying=true;try{KEYS.forEach(k=>{const nv=Object.prototype.hasOwnProperty.call(d,k)?d[k]:null,cur=raw(k);if(nv===null){if(k!=='iptv_m3u_url'&&cur!==null){_rem.call(localStorage,k);changed.add(k)}}else if(cur!==nv){_set.call(localStorage,k,nv);changed.add(k)}});if(changed.size){if(MAPK.some(k=>changed.has(k))&&window.svReloadMapCfg)try{window.svReloadMapCfg()}catch(e){}if(changed.has('santv_display_settings_v2'))try{loadDisplaySettings();applyDisplaySettings();applyOrientationPreference()}catch(e){}if(PROXYK.some(k=>changed.has(k))){try{const x=$('proxyUrlInput');if(x)x.value=raw('iptv_proxy')||''}catch(e){}if(window.svRefresh)try{window.svRefresh()}catch(e){}}if(changed.has('santv_sort')){const x=$('channelSort'),v=raw('santv_sort');if(x&&v){x.value=v;x.dispatchEvent(new Event('change'))}}if(changed.has('iptv_multi_urls_v1')){try{if(window.svLoadAllPlaylists)window.svLoadAllPlaylists(true)}catch(e){}}try{if(window.svDash&&window.svDash.refresh)window.svDash.refresh()}catch(e){}lastAt=Date.now();toast('⚙️ Settings updated from another device')}}finally{applying=false}}
+ function applyRemote(row){const p=row&&row.payload;if(!p||!p.data||p.device===DEV||p.stamp===lastStamp)return;const d=p.data,changed=new Set();applying=true;try{KEYS.forEach(k=>{const nv=Object.prototype.hasOwnProperty.call(d,k)?d[k]:null,cur=raw(k);if(nv===null){if(k!=='iptv_m3u_url'&&cur!==null){_rem.call(localStorage,k);changed.add(k)}}else if(cur!==nv){_set.call(localStorage,k,nv);changed.add(k)}});if(changed.size){if(MAPK.some(k=>changed.has(k))&&window.svReloadMapCfg)try{window.svReloadMapCfg()}catch(e){}if(changed.has('santv_display_settings_v2'))try{loadDisplaySettings();applyDisplaySettings();applyOrientationPreference()}catch(e){}if(PROXYK.some(k=>changed.has(k))){try{const x=$('proxyUrlInput');if(x)x.value=raw('iptv_proxy')||''}catch(e){}if(window.svRefresh)try{window.svRefresh()}catch(e){}}if(changed.has('santv_sort')){const x=$('channelSort'),v=raw('santv_sort');if(x&&v){x.value=v;x.dispatchEvent(new Event('change'))}}if(changed.has('iptv_multi_urls_v1')){try{if(window.svLoadAllPlaylists)window.svLoadAllPlaylists(true)}catch(e){}}if(changed.has('santv_my_channels_v1')){try{channels=withMine(channels);if(playlistState==='none'||playlistState==='error')playlistState=channels.length?'ready':'none';buildAutoFilters(channels);renderChannels(applyFilters(channels))}catch(e){console.error(e)}}
+ if(['santv_setting_autoplay_home_v1','santv_setting_classic_guide_v1','santv_content_languages_v1','santv_low_network_mode_v1'].some(k=>changed.has(k))){setTimeout(()=>{const ps=document.getElementById('player-screen');if(!ps||getComputedStyle(ps).display==='none')location.reload()},1500)}
+ try{if(window.svDash&&window.svDash.refresh)window.svDash.refresh()}catch(e){}lastAt=Date.now();toast('⚙️ Settings updated from another device')}}finally{applying=false}}
  async function fetchRemote(){if(!ready()||busy)return;busy=true;try{const p=cur(),row=await PROV[p].read(cfg(p));state='live';if(row)applyRemote(row);if(!synced){synced=true;if(dirty){dirty=false;schedule()}}status()}catch(e){state='err';status()}finally{busy=false}}
  function stopES(){if(es){try{es.close()}catch(e){}es=null}}
  function kick(n){n=n||0;if(busy&&n<10){setTimeout(()=>kick(n+1),400);return}fetchRemote()}
