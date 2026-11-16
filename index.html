@@ -3132,10 +3132,23 @@ button { touch-action: manipulation; }
         // Phone rotates to landscape -> big-screen player; back to portrait -> player returns to its fixed spot at the top.
         let lastPortrait = window.innerHeight > window.innerWidth;
         const isTouch = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+        // True only when the phone is really rotated. The on-screen keyboard shrinks the window height,
+        // which used to look like "landscape" and popped the player open over the Admin password box.
+        function isRealLandscape() {
+            const a = document.activeElement;
+            if (a && (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable)) return false;
+            if (typeof window.orientation === 'number') return Math.abs(window.orientation) === 90;
+            if (window.screen && screen.orientation && screen.orientation.type) return /landscape/.test(screen.orientation.type);
+            return window.innerHeight <= window.innerWidth;
+        }
+        function overlayPageOpen() {
+            return ['svPassGate','settingsPage','svAdminPage','svMapPage','svProxyPage','svSyncPage','dataUsagePage','contentLangPage','displaySettingsPage','search-page']
+                .some(id => { const e = document.getElementById(id); return e && getComputedStyle(e).display !== 'none'; });
+        }
         function onOrient() {
             const portrait = window.innerHeight > window.innerWidth;
             if (portrait !== lastPortrait) lastPortrait = portrait;
-            if (!portrait && !plOpen && currentStreamUrl && isTouch && window.innerWidth <= 960) {
+            if (isRealLandscape() && !overlayPageOpen() && !plOpen && currentStreamUrl && isTouch && window.innerWidth <= 960) {
                 openExpandedPlayer(true);
                 return;
             }
@@ -4516,7 +4529,7 @@ button { touch-action: manipulation; }
 
 <!-- ===== SanTV: Settings password (today's DDMM) ===== -->
 <style>
-#svPassGate{position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,.78);display:none;align-items:center;justify-content:center;padding:16px}
+#svPassGate{position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.78);display:none;align-items:center;justify-content:center;padding:16px}
 #svPassGate .box{background:#fff;color:#172033;border-radius:16px;padding:22px;width:min(340px,100%);text-align:center;font:15px system-ui}
 #svPassGate h3{margin:0 0 6px;font-size:19px}
 #svPassGate input{width:100%;box-sizing:border-box;padding:14px;border:2px solid #ccd3df;border-radius:12px;font-size:26px;letter-spacing:10px;text-align:center;margin:14px 0 8px;background:#fff;color:#172033}
